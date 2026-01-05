@@ -1,32 +1,34 @@
 import json
 import os
 import pandas as pd
-import zipfile
-import google.generativeai as genai
 from io import StringIO
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 # Load environment variables from .env file
 load_dotenv()
 api_key = os.getenv('API_KEY')
 
-# Configure the API key for Gemini
-genai.configure(api_key=api_key)
+# Initialize the Client (New SDK pattern)
+client = genai.Client(api_key=api_key)
 
-# Define the prompt for the Gemini API
+# Define the prompt (Same as before)
 gemini_prompt = """
-Create a set of school district rostering data in CSV format according to the provided specifications. The set should include the following files: schools.csv, teachers.csv, students.csv, sections.csv,enrollments.csv, and staff.csv. The data should have the following characteristics:
-- 5 Schools
-- 5 Teachers per School
-- 2 Staff per School
-- 5 Sections per School with different grade levels
+Create a set of school district rostering data in CSV format according to the provided specifications. The set should include the following files: schools.csv, teachers.csv, students.csv, sections.csv, enrollments.csv, and staff.csv. The data should have the following characteristics:
+- 3 Schools
+- 10 Teachers per School
+- 10 Staff per School
+- 10 Sections per School with different grade levels
 - 1 of the sections for each school should have 2 teachers
-- 10 students per class
+- 12 students per class
 - 1 of the students in each section belongs to multiple sections in the school
 - All IDs fields that are IDs or numbers must be unique
-- All email addresses must be unique and realistic
-- No two first names across all files can be the same
-- No two last names across all files can be the same
+- All email addresses must be unique and realistic and use the domain "district1.net"
+- No two first names across all files can be the same, must be realistic, and cannot contain numbers or special characters
+- No two last names across all files can be the same, must be realistic and cannot contain numbers or special characters
+
+Output the result as a single JSON object where the keys are the filenames (e.g., "schools.csv") and the values are the CSV content strings.
 
 The columns for each file should include:
 
@@ -93,37 +95,45 @@ The columns for each file should include:
 - title
 """
 
-# Generate data using the Gemini API
-response = genai.GenerativeModel('gemini-1.5-flash-latest').generate_content(
-    gemini_prompt,
-    generation_config=genai.GenerationConfig(
+print("Generating data...")
+
+# Generate data using the new Client structure
+response = client.models.generate_content(
+    model='gemini-2.5-flash',
+    contents=gemini_prompt,
+    config=types.GenerateContentConfig(
         response_mime_type="application/json",
         temperature=0.7
     )
 )
 
-# Extract the generated data from the API response
-candidates = response.candidates
-content = candidates[0].content.parts[0].text
-print(content)
-# print(type(content))
-# Convert the JSON string to a Python dictionary
-data_dict = json.loads(content)
-# print(data_dict)
-csv_data = data_dict
+# Extract text directly using the new SDK property
+content = response.text
 
-# # Directory to save CSV files
-output_dir = 'school_district_data'
-os.makedirs(output_dir, exist_ok=True)
-
-# # Save each DataFrame to a CSV file
-for filename, csv_string in data_dict.items():
-# Convert the CSV string to a pandas DataFrame
-    df = pd.read_csv(StringIO(csv_string))
+try:
+    # Convert the JSON string to a Python dictionary
+    data_dict = json.loads(content)
     
-# Save the DataFrame to a CSV file
-    filepath = os.path.join(output_dir, filename)
-    df.to_csv(filepath, index=False)
-    print(f"Saved {filename}")
+    # Directory to save CSV files
+    output_dir = 'school_district_data'
+    os.makedirs(output_dir, exist_ok=True)
 
-# print("All CSV files have been created and saved successfully.")
+    # Save each DataFrame to a CSV file
+    for filename, csv_string in data_dict.items():
+        # Clean up any potential markdown code blocks if the model added them
+        if csv_string.startswith("```csv"):
+            csv_string = csv_string.replace("```csv", "").replace("```", "")
+            
+        df = pd.read_csv(StringIO(csv_string))
+        
+        filepath = os.path.join(output_dir, filename)
+        df.to_csv(filepath, index=False)
+        print(f"Saved {filename}")
+
+    print("All CSV files have been created and saved successfully.")
+
+except json.JSONDecodeError as e:
+    print(f"Error decoding JSON: {e}")
+    print("Raw output:", content)
+except Exception as e:
+    print(f"An error occurred: {e}")
