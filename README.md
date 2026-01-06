@@ -132,13 +132,15 @@ District 2 Base: 200,000
 
 # Limitations & Theoretical Constraints
 
-## 1. The Token Limit (The "Hard" Wall)
+### 1. The Token Limit (The "Hard" Wall)
 The Gemini API has an output token limit per request. This script generates data per school. If you request too many students for a single school, the JSON response will be truncated, causing the script to fail for that school.Safe Limit: ~150-180 Students per School.Danger Zone: >250 Students per School.Workaround: If you need 5,000 students, generate 30 schools with 150 students each, rather than 1 school with 5,000 students.
 
-## 2. API Quotas (The "Invisible" Wall)Google's Free Tier has daily request limits (approx. 1,500 requests/day).
-   * Math: 1 District (5 Schools) = ~6 API Calls.Capacity: You can generate roughly 250 districts per day on the free tier.
+### 2. API Quotas (The "Invisible" Wall)Google's Free Tier has daily request limits (approx. 1,500 requests/day).
+   * Math: 1 District (5 Schools) = ~6 API Calls.
+   * Capacity: You can generate roughly 250 districts per day on the free tier.
+   * If you set SCHOOLS_PER_DISTRICT higher than ~15 to 20, Phase 1 will likely cut off mid-stream, resulting in invalid JSON.
 
-## 3. Synchronous Execution
+### 3. Synchronous Execution
    * The script runs synchronously to preserve order and referential integrity.
-   * Speed: ~10-15 seconds per school.
-   * Estimates:1 District (5 schools) $\approx$ 1.5 minutes.10 Districts $\approx$ 15 minutes.
+      * Speed: ~10-15 seconds per school.
+      * Estimates:1 District (5 schools) $\approx$ 1.5 minutes.10 Districts $\approx$ 15 minutes.
