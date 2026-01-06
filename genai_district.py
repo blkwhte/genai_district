@@ -1,4 +1,5 @@
 import os
+import datetime
 import time
 import pandas as pd
 from dotenv import load_dotenv
@@ -197,6 +198,13 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, ta
     if INCLUDE_CO_TEACHERS:
         co_teacher_instruction = "- Populate 'Teacher_2_id' for at least one section."
 
+    # --- DOB LOGIC ---
+    current_year = datetime.date.today().year
+    # K-12 Students are typically 5 to 19 years old.
+    # We add a 1-year buffer to be safe.
+    min_birth_year = current_year - 20  # Approx 19-20 years old max
+    max_birth_year = current_year - 4   # Approx 4-5 years old min
+    
     prompt = f"""
     Generate roster for School: {school.School_name} (ID: {school.School_id}).
     
@@ -211,6 +219,9 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, ta
     - New IDs (Student/Section) must start at {id_start}.
     - Student emails must use the school's district domain.
     - Realistic names.
+    - **DOB REALISM**: Use the current year ({current_year}) as the reference. 
+      Student birth years MUST be between {min_birth_year} and {max_birth_year} to match K-12 ages.
+      Example: A 1st grader should be born around {current_year - 6}.
     """
     return generate_with_retry(prompt, SchoolRoster, task_id, progress, f"Rostering {school.School_name}")
 
