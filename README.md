@@ -55,7 +55,7 @@ Below is the current prompt being fed into the model. If you try upping the numb
 # Generated Test Data Specification
 
 ### 1. Data Structure Overview
-This dataset simulates a multi-district environment for Clever/OneRoster integration testing. Each district is contained in its own subdirectory but maintains globally unique identifiers to prevent cross-contamination during ingest.
+This dataset simulates a multi-district environment for Clever Rostering integration testing. Each district is contained in its own subdirectory but maintains globally unique identifiers to prevent cross-contamination during ingest.
 
 **Directory Hierarchy:**
 ```text
@@ -79,13 +79,9 @@ school_district_data/
 | Content Cell  | Content Cell  |
 | Content Cell  | Content Cell  |
 
-### 3. Staff & Faculty Schemas
-### Part 2: Staff & Faculty Schemas
-
-```markdown
 ### 3. CSV Schemas & Relationships (Staff & Faculty)
 The data adheres to strict referential integrity. All foreign keys (e.g., `Teacher_id` in `sections.csv`) point to valid records existing in the corresponding files.
-
+```
 #### A. schools.csv
 * **Primary Key:** `School_id`
 * **Logic:** 3-5 schools per district (configurable).
@@ -130,10 +126,11 @@ The data adheres to strict referential integrity. All foreign keys (e.g., `Teach
 * **Foreign Keys:** `School_id`, `Section_id`, `Student_id`
 * **Logic:** Ensures every student belongs to at least one section. Includes multi-section enrollments.
 * **Columns:** `School_id`, `Section_id`, `Student_id`
+```
 
 ### 5. Data Quality Standards
 * **Emails:** Formatted as `user@{district_name}.k12.edu`.
 * **Names:** Realistic human names (no "Student1" or "TestUser").
 * **Format:** Standard CSV (Comma Separated), UTF-8 encoded.
-```
+
 
