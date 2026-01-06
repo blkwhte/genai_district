@@ -161,3 +161,16 @@ On the free tier (Gemini API), Google enforces a limit on how many requests you 
 * Your Usage: 1 Request per District (Phase 1) + 1 Request per School (Phase 2).
 * Calculation: If you have 5 schools per district, that is 6 API calls per district.
     * $1,500 / 6 = \text{approx. } 250 \text{ districts per day.}$
+
+### 3. The Time Factor
+This script is synchronous (it waits for one school to finish before starting the next).
+
+* Average Generation Time: ~15 seconds per school.
+
+* Math:
+
+    * 1 District (5 Schools): ~1.5 minutes.
+    * 10 Districts: ~15 minutes.
+    * 50 Districts: ~1.25 hours.
+
+**Recommendation:** For a standard test run, 5 to 10 districts is the "sweet spot." It provides plenty of data variability (50+ schools, 200+ teachers, 1000+ students) but finishes in the time it takes to grab a coffee.
