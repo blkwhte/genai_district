@@ -251,6 +251,30 @@ if __name__ == "__main__":
             # --- PHASE 1: Structure ---
             try:
                 struct = generate_district_structure(i, dist_name, base_id, main_task, progress)
+                
+                # --- NEW: DUAL ROLE LOGIC (Teacher + Staff) ---
+                # We take the first teacher and "hire" them as a staff member too.
+                if struct.teachers and struct.staff:
+                    target_teacher = struct.teachers[0]
+                    
+                    # Find a safe new ID (Increment the highest existing Staff ID)
+                    existing_ids = [int(s.Staff_id) for s in struct.staff]
+                    new_staff_id = str(max(existing_ids) + 1)
+                    
+                    dual_role_staff = Staff(
+                        School_id=target_teacher.School_id,
+                        Staff_id=new_staff_id,
+                        Staff_email=target_teacher.Teacher_email, # CRITICAL: Same Email links the user
+                        First_name=target_teacher.First_name,
+                        Last_name=target_teacher.Last_name,
+                        Department="Dual Role Test",
+                        Title="Teacher & Support Staff"
+                    )
+                    
+                    # Add to the list so it gets saved to CSV later
+                    struct.staff.append(dual_role_staff)
+                    console.print(f"   [dim]Created Dual Role: {target_teacher.First_name} {target_teacher.Last_name}[/dim]")
+
                 progress.advance(main_task) # Phase 1 Done
                 
                 # Prepare Master Lists
