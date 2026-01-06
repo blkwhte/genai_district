@@ -93,7 +93,11 @@ You can toggle between two distinct logic modes during runtime:
 ### Mode A: Alphanumeric (Recommended)
 Simulates modern, high-security production environments. IDs are non-sequential and state-aware.
 
-{table}
+| Entity | ID Format | Example |
+| :--- | :--- | :--- |
+| **School** | 5-6 char Hex | `8f4a1` |
+| **Student** | State + SchoolCode + Number | `CA-01-10482910` |
+| **Teacher** | State + 'T' + Number | `CA-T-923456` |
 
 * Collision Protection: Each district is assigned a unique numeric prefix (e.g., 10, 11) for its internal numbers, ensuring that even if two districts use similar logic, their IDs never overlap.
 
