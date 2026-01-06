@@ -135,7 +135,7 @@ The data adheres to strict referential integrity. All foreign keys (e.g., `Teach
 
 # Limitations
 
-###1. The "Per-School" Token Limit (The Hardest Wall)
+### 1. The "Per-School" Token Limit (The Hardest Wall)
 Even though we chunk data by school, each school's roster is generated in a single API call. If a single school is too large, the JSON response will get cut off, and that specific school will fail.
 
 * **The Limit:** ~8,192 Output Tokens (approx. 30,000 characters).
@@ -154,4 +154,10 @@ Even though we chunk data by school, each school's roster is generated in a sing
     * Students per Section: 20
     * Total: 100 Students $\rightarrow$ **Safe**.
 
-###
+### 2. The Daily Quota Limit (The "Invisible" Wall)
+On the free tier (Gemini API), Google enforces a limit on how many requests you can make per day.
+
+* Limit: Typically 1,500 requests per day (Free Tier).
+* Your Usage: 1 Request per District (Phase 1) + 1 Request per School (Phase 2).
+* Calculation: If you have 5 schools per district, that is 6 API calls per district.
+    * $1,500 / 6 = \text{approx. } 250 \text{ districts per day.}$
