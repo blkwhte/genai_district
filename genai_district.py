@@ -44,7 +44,17 @@ SECTIONS_PER_SCHOOL = IntPrompt.ask("How many [cyan]Sections per School[/cyan]?"
 STUDENTS_PER_SECTION = IntPrompt.ask("How many [cyan]Students per Section[/cyan]?", default=15)
 INCLUDE_CO_TEACHERS = Confirm.ask("Include [cyan]Co-Teachers[/cyan] in at least one section?", default=True)
 
-DISTRICT_NAMES = ["WestCharter", "EastCharter", "NorthCharter", "SouthCharter", "CentralValley", "Lakeside", "MountainView", "PacificCoast"]
+# --- NEW: GENERIC / UNIVERSAL NAMES ---
+# These work in any US State (MA, TX, CA, etc.)
+GENERIC_DISTRICT_NAMES = [
+    "MapleValley", "OakRiver", "SummitHeights", "PineCreek", 
+    "LibertyUnion", "Heritage", "PioneerValley", "GrandView", 
+    "Clearwater", "HopeSprings", "NorthStar", "GoldenPlains",
+    "SilverLake", "WillowCreek", "Unity", "CedarRidge"
+]
+
+# Randomize the list so we get different names every run
+random.shuffle(GENERIC_DISTRICT_NAMES)
 
 # State Mappings
 STATE_MAPPINGS = {
@@ -102,8 +112,8 @@ class School(BaseModel):
 class Teacher(BaseModel):
     School_id: str
     Teacher_id: str
-    Teacher_number: str       # <--- NEW FIELD
-    State_teacher_id: str     # <--- NEW FIELD
+    Teacher_number: str       
+    State_teacher_id: str     
     Teacher_email: EmailStr
     First_name: str = RealisticName
     Last_name: str = RealisticName
@@ -127,7 +137,7 @@ class Student(BaseModel):
     School_id: str
     Student_id: str
     Student_number: str 
-    State_id: str             # <--- NEW FIELD
+    State_id: str             
     Last_name: str = RealisticName
     First_name: str = RealisticName
     Grade: GradeLevel
@@ -170,7 +180,7 @@ def get_id_instructions(mode, state_abbr, base_id):
     Generates the specific prompt instruction for IDs.
     """
     if mode == "alphanumeric":
-        return f"IDs (School/Teacher/Student) must be Random HEX strings (e.g., 8f4e2a). Do NOT include State prefixes here."
+        return f"IDs must be Random HEX strings. Do NOT include State prefixes here."
     else:
         return f"IDs must be numeric and start at {base_id}."
 
@@ -211,11 +221,6 @@ def generate_district_structure(dist_index, dist_name, id_start, task_id, progre
     
     id_instr = get_id_instructions(ID_MODE, state_abbr, id_start)
 
-    # --- TEACHER ID LOGIC ---
-    # Teacher_id: Hex (e.g. 6c1e2d1)
-    # Teacher_number: T-[6 digits] (e.g. T-923456)
-    # State_teacher_id: [State]-[Teacher_number] (e.g. CA-T-923456)
-
     prompt = f"""
     Generate structure for '{dist_name} District' located in {state_name} ({state_abbr}).
     
@@ -228,17 +233,24 @@ def generate_district_structure(dist_index, dist_name, id_start, task_id, progre
     CONSTRAINTS:
     - {id_instr}
     - Emails must use @{email_domain}.
-    - School City/State/Zip must be valid for {state_name}.
     
+    - **LENGTH RULES**:
+      1. School_id: Must be between 5 and 6 characters long (e.g. '8f4a1' or '9b3c2d').
+      2. Teacher_id & Staff_id: Must be exactly 7 characters long (e.g. '7e6d5c4').
+
     - **TEACHER SPECIFIC FORMATS**:
-      1. Teacher_id: Unique Random Hex String (e.g. '6c1e2d1').
-      2. Teacher_number: Format 'T-[6 DIGITS]' (e.g. 'T-923456').
-      3. State_teacher_id: Format '{state_abbr}-[Teacher_number]' (e.g. '{state_abbr}-T-923456').
+      1. Teacher_number: Format 'T-[6 DIGITS]' (e.g. 'T-923456').
+      2. State_teacher_id: Format '{state_abbr}-T-[6 Digits from Teacher_number]' (e.g. '{state_abbr}-T-923456').
+
+    - **STRICT ANTI-PATTERN RULES** (Do NOT break this):
+      - IDs must look SCRAMBLED and HIGH ENTROPY.
+      - NO sequential numbers (e.g., forbid '123456', '765432').
+      - NO sequential letters (e.g., forbid 'abcde', 'edcba').
+      - NO repeating characters (e.g., forbid 'aaaaa', '11111').
     """
     return generate_with_retry(prompt, DistrictStructure, task_id, progress, f"Building {dist_name} Structure")
 
-def generate_school_roster(school: School, teachers: List[Teacher], id_start, district_num_prefix, task_id, progress):
-    # Filter teachers for THIS school only
+def generate_school_roster(school: School, teachers: List[Teacher], id_start, district_num_prefix, school_code_2digit, task_id, progress):
     school_teachers = [t for t in teachers if t.School_id == school.School_id]
     teacher_ids = [t.Teacher_id for t in school_teachers]
     
@@ -252,14 +264,6 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, di
     
     state_abbr = school.School_state if len(school.School_state) == 2 else "XX"
     id_instr = get_id_instructions(ID_MODE, state_abbr, id_start)
-    
-    # We use a shorthand for the year suffix (e.g. "26" for 2026)
-    yr_suffix = str(current_year)[-2:]
-
-    # --- STUDENT ID LOGIC ---
-    # Student_id: Hex (e.g. 7d2a1f1)
-    # Student_number: [Prefix][Random] (e.g. 10894561)
-    # State_id: [State]-[Yr]-[Student_number] (e.g. CA-26-10894561)
 
     prompt = f"""
     Generate roster for School: {school.School_name} (ID: {school.School_id}).
@@ -272,16 +276,23 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, di
     - {co_teacher_instruction}
     
     CONSTRAINTS:
-    - {id_instr} (Applies to Student_id and Section_id)
+    - {id_instr}
+    
+    - **LENGTH RULES**:
+      1. Student_id: Must be exactly 6 characters long (e.g. 'a1b2c3').
     
     - **STUDENT SPECIFIC FORMATS**:
-      1. Student_id: Unique Random Hex String (e.g. '7d2a1f1').
-      2. Student_number: 8-digit integer starting with '{district_num_prefix}'. (e.g. '{district_num_prefix}82910').
-      3. State_id: Format '{state_abbr}-{yr_suffix}-[Student_number]' (e.g. '{state_abbr}-{yr_suffix}-{district_num_prefix}82910').
+      1. Student_number: 8-digit integer starting with '{district_num_prefix}'. (e.g. '{district_num_prefix}82910').
+      2. State_id: Format '{state_abbr}-{school_code_2digit}-[Student_number]' (e.g. '{state_abbr}-{school_code_2digit}-{district_num_prefix}82910').
       
     - Student emails must use the school's district domain.
-    - Realistic names.
     - DOB between {min_birth_year} and {max_birth_year}.
+
+    - **STRICT ANTI-PATTERN RULES** (Do NOT break this):
+      - IDs must look SCRAMBLED and HIGH ENTROPY.
+      - NO sequential numbers (e.g., forbid '123456', '765432').
+      - NO sequential letters (e.g., forbid 'abcde', 'edcba').
+      - NO repeating characters (e.g., forbid 'aaaaa', '11111').
     """
     return generate_with_retry(prompt, SchoolRoster, task_id, progress, f"Rostering {school.School_name}")
 
@@ -303,10 +314,12 @@ if __name__ == "__main__":
         main_task = progress.add_task("[green]Initializing...", total=total_ops)
 
         for i in range(NUM_DISTRICTS):
-            dist_name = DISTRICT_NAMES[i % len(DISTRICT_NAMES)]
+            # Pick a random name from the shuffled list (cycling if we exceed list length)
+            dist_name = GENERIC_DISTRICT_NAMES[i % len(GENERIC_DISTRICT_NAMES)]
+            
             base_id = (i + 1) * 100000 
             
-            # Prefix for Student Numbers (e.g. 10, 11)
+            # Prefixes and Codes
             district_prefix = str(10 + i) 
             
             # --- PHASE 1: Structure ---
@@ -317,7 +330,8 @@ if __name__ == "__main__":
                 if struct.teachers and struct.staff:
                     target_teacher = struct.teachers[0]
                     if ID_MODE == 'alphanumeric':
-                        new_staff_id = f"{target_teacher.Teacher_id}-DUAL"
+                        new_staff_id = f"{target_teacher.Teacher_id}D" # Add 'D' to keep it near 7 chars?
+                        if len(new_staff_id) > 7: new_staff_id = new_staff_id[:7] # Strict clip
                     else:
                         existing_ids = [int(s.Staff_id) for s in struct.staff if s.Staff_id.isdigit()]
                         start_num = max(existing_ids) + 1 if existing_ids else 9999
@@ -348,12 +362,15 @@ if __name__ == "__main__":
                 for s_idx, school in enumerate(all_schools):
                     school_id_offset = base_id + ((s_idx + 1) * 10000)
                     
-                    # Pass Prefix
+                    # GENERATE 2-DIGIT SCHOOL CODE
+                    school_code_2digit = f"{s_idx + 1:02d}"
+
                     roster = generate_school_roster(
                         school, 
                         all_teachers, 
                         school_id_offset, 
                         district_prefix,
+                        school_code_2digit, 
                         main_task, 
                         progress
                     )
