@@ -1,5 +1,5 @@
 # Clever School District Data Generator (GenAI)
-A robust Python tool that uses the Google Gemini API to generate high-fidelity, referentially intact synthetic data for education technology (EdTech) testing.
+A robust Python tool that uses the Google Gemini API to generate high-fidelity, referentially intact synthetic data for testing Clever rostering integrations.
 
 This tool simulates complex multi-district environments, creating coherent CSV datasets (Schools, Teachers, Staff, Students, Sections, Enrollments) suitable for testing Clever rostering integrations.
 
