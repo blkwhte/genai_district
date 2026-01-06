@@ -6,9 +6,13 @@ This tool simulates complex multi-district environments, creating coherent CSV d
 # Key Features
 
 * **Dual ID Modes**: Choose between simple Sequential Integers (e.g., 100, 101) or complex State-Mapped Alphanumeric IDs (e.g., CA-01-8f4e2a).
+
 * **Referential Integrity**: Guarantees that every Student_id in an enrollment file matches a "real" student, and every Teacher_id in a section file matches a "real" teacher wihtin the dataset.
+
 * **Localized Context**: Automatically maps districts to real US states (e.g., "WestCharter" $\rightarrow$ California), adjusting zip codes, city names, and ID formats accordingly.
+
 * **Smart Rostering**:Generates Co-Teaching scenarios.Creates Dual Role users (a user who is both a Teacher and Staff member).Enforces realistic DOB/Grade alignment.
+
 * **Anti-Pattern Enforcement**: Actively prevents "lazy" AI generation (e.g., forbids sequential 12345 IDs) to ensure high-entropy, production-like data.
 
 # Setup & Installation
