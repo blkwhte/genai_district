@@ -4,52 +4,67 @@ import pandas as pd
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from google.genai.types import HarmCategory, HarmBlockThreshold # Import Safety Types
+from google.genai.types import HarmCategory, HarmBlockThreshold
 from pydantic import BaseModel, EmailStr, Field
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 
-# Import Rich for the progress UI
+# Import Rich for UI
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+from rich.prompt import IntPrompt, Confirm
+from rich.table import Table
 
 # Load environment variables
 load_dotenv()
 api_key = os.getenv('API_KEY')
 client = genai.Client(api_key=api_key)
-
-# Initialize Rich Console
 console = Console()
 
 # ---------------------------------------------------------
-# 1. Configuration & Constants
+# 1. Configuration (Interactive)
 # ---------------------------------------------------------
 
-NUM_DISTRICTS = 1
+console.rule("[bold blue]School Data Generator Setup[/bold blue]")
 
-DISTRICT_NAMES = [
-    "WestCharter", "EastCharter", "NorthCharter", "SouthCharter", 
-    "CentralValley", "Lakeside", "MountainView", "PacificCoast"
-]
+# Ask the user for inputs
+NUM_DISTRICTS = IntPrompt.ask("How many [cyan]Districts[/cyan]?", default=2)
+SCHOOLS_PER_DISTRICT = IntPrompt.ask("How many [cyan]Schools per District[/cyan]?", default=3)
+TEACHERS_PER_SCHOOL = IntPrompt.ask("How many [cyan]Teachers per School[/cyan]?", default=5)
+SECTIONS_PER_SCHOOL = IntPrompt.ask("How many [cyan]Sections per School[/cyan]?", default=4)
+STUDENTS_PER_SECTION = IntPrompt.ask("How many [cyan]Students per Section[/cyan]?", default=15)
+INCLUDE_CO_TEACHERS = Confirm.ask("Include [cyan]Co-Teachers[/cyan] in at least one section?", default=True)
+
+DISTRICT_NAMES = ["WestCharter", "EastCharter", "NorthCharter", "SouthCharter", "CentralValley", "Lakeside", "MountainView", "PacificCoast"]
+
+# Display Summary
+summary_table = Table(title="Configuration Summary")
+summary_table.add_column("Setting", style="cyan")
+summary_table.add_column("Value", style="magenta")
+summary_table.add_row("Districts", str(NUM_DISTRICTS))
+summary_table.add_row("Schools/District", str(SCHOOLS_PER_DISTRICT))
+summary_table.add_row("Teachers/School", str(TEACHERS_PER_SCHOOL))
+summary_table.add_row("Sections/School", str(SECTIONS_PER_SCHOOL))
+summary_table.add_row("Students/Section", str(STUDENTS_PER_SECTION))
+summary_table.add_row("Co-Teachers", "Yes" if INCLUDE_CO_TEACHERS else "No")
+
+console.print(summary_table)
+if not Confirm.ask("Ready to generate?", default=True):
+    console.print("[red]Aborted.[/red]")
+    exit()
 
 # ---------------------------------------------------------
-# 2. Strict Clever Schemas (Pydantic)
+# 2. Pydantic Models (Split into Phase 1 & Phase 2)
 # ---------------------------------------------------------
 
 GenderType = Literal['M', 'F', 'X']
 GradeLevel = Literal['PK', 'KG', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
-YesNo = Literal['Y', 'N']
+RealisticName = Field(..., pattern=r"^[^0-9]+$")
 
-RealisticName = Field(
-    ..., 
-    description="A realistic human name. MUST NOT contain numbers.", 
-    pattern=r"^[^0-9]+$" 
-)
-
+# --- PHASE 1 MODELS (Structure) ---
 class School(BaseModel):
     School_id: str
     School_name: str
     School_number: str
-    State_id: Optional[str] = None
     Low_grade: GradeLevel
     High_grade: GradeLevel
     Principal: str
@@ -63,46 +78,10 @@ class School(BaseModel):
 class Teacher(BaseModel):
     School_id: str
     Teacher_id: str
-    Teacher_number: Optional[str] = None
-    State_teacher_id: Optional[str] = None
     Teacher_email: EmailStr
     First_name: str = RealisticName
-    Middle_name: Optional[str] = Field(None, pattern=r"^[^0-9]+$")
     Last_name: str = RealisticName
     Title: str
-
-class Student(BaseModel):
-    School_id: str
-    Student_id: str
-    Student_number: Optional[str] = None
-    State_id: Optional[str] = None
-    Last_name: str = RealisticName
-    Middle_name: Optional[str] = Field(None, pattern=r"^[^0-9]+$")
-    First_name: str = RealisticName
-    Grade: GradeLevel
-    Gender: GenderType
-    DOB: str = Field(description="Date of birth in MM/DD/YYYY format")
-    Race: Optional[str] = None
-    Ell_status: Optional[YesNo] = None
-    Frl_status: Optional[str] = None
-    Email_address: EmailStr
-
-class Section(BaseModel):
-    School_id: str
-    Section_id: str
-    Teacher_id: str
-    Teacher_2_id: Optional[str] = Field(None, description="Second teacher ID")
-    Name: str
-    Section_number: str
-    Grade: GradeLevel
-    Course_name: str
-    Subject: str
-    Period: Optional[str] = None
-
-class Enrollment(BaseModel):
-    School_id: str
-    Section_id: str
-    Student_id: str
 
 class Staff(BaseModel):
     School_id: str
@@ -113,137 +92,188 @@ class Staff(BaseModel):
     Department: str
     Title: str
 
-class DistrictData(BaseModel):
-    schools: list[School]
-    teachers: list[Teacher]
-    students: list[Student]
-    sections: list[Section]
-    enrollments: list[Enrollment]
-    staff: list[Staff]
+class DistrictStructure(BaseModel):
+    schools: List[School]
+    teachers: List[Teacher]
+    staff: List[Staff]
+
+# --- PHASE 2 MODELS (Rosters) ---
+class Student(BaseModel):
+    School_id: str
+    Student_id: str
+    Student_number: str
+    Last_name: str = RealisticName
+    First_name: str = RealisticName
+    Grade: GradeLevel
+    Gender: GenderType
+    DOB: str
+    Email_address: EmailStr
+
+class Section(BaseModel):
+    School_id: str
+    Section_id: str
+    Teacher_id: str
+    Teacher_2_id: Optional[str] = None
+    Name: str
+    Grade: GradeLevel
+    Subject: str
+
+class Enrollment(BaseModel):
+    School_id: str
+    Section_id: str
+    Student_id: str
+
+class SchoolRoster(BaseModel):
+    students: List[Student]
+    sections: List[Section]
+    enrollments: List[Enrollment]
 
 # ---------------------------------------------------------
-# 3. Generator Logic (With Safety Fixes)
+# 3. Helpers
 # ---------------------------------------------------------
 
-def generate_district(district_index, status_spinner):
-    """
-    Generates data with safety settings enabled to prevent empty responses.
-    """
-    id_start = (district_index + 1) * 10000 
-    dist_name = DISTRICT_NAMES[district_index % len(DISTRICT_NAMES)]
-    email_domain = f"{dist_name.lower()}.k12.edu"
-    
-    prompt = f"""
-    Generate a realistic school district dataset for '{dist_name} District'.
-    
-    DATA SPECIFICATIONS:
-    - 5 Schools (Mix of Elementary, Middle, High).
-    - 5 Teachers per School.
-    - 2 Staff per School.
-    - 5 Sections per School.
-    - 10 Students per Section.
-    - At least 1 section per school should have a 'Teacher_2_id' populated.
-    - 1 Student in each section should belong to multiple sections.
-    
-    CRITICAL QUALITY CONTROLS:
-    - **NO PLACEHOLDER NAMES**: Names like "Teacher1" or "Lname4" are FORBIDDEN.
-    - **DOMAIN**: All emails MUST use the domain @{email_domain}.
-    - **IDS**: All IDs MUST be integers starting at {id_start}.
-    
-    Output must strictly adhere to the JSON schema provided.
-    """
-    
-    # SAFETY SETTINGS: Allow all content (prevents blocking fake PII)
-    safety_settings = [
-        types.SafetySetting(category=HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=HarmBlockThreshold.BLOCK_NONE),
-        types.SafetySetting(category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=HarmBlockThreshold.BLOCK_NONE),
-        types.SafetySetting(category=HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=HarmBlockThreshold.BLOCK_NONE),
-        types.SafetySetting(category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=HarmBlockThreshold.BLOCK_NONE),
+def get_safety_settings():
+    return [
+        types.SafetySetting(category=c, threshold=HarmBlockThreshold.BLOCK_NONE)
+        for c in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, 
+                  HarmCategory.HARM_CATEGORY_HARASSMENT, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT]
     ]
 
+def generate_with_retry(prompt, schema, task_id, progress, label):
+    """Generic retry wrapper for API calls"""
     for attempt in range(3):
         try:
-            status_spinner.update(f"[bold blue]Generating {dist_name}... (Attempt {attempt+1}/3)")
-            
+            progress.update(task_id, description=f"[blue]{label} (Attempt {attempt+1})")
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=DistrictData, 
+                    response_schema=schema,
                     temperature=0.7,
-                    safety_settings=safety_settings # Apply safety settings
+                    safety_settings=get_safety_settings()
                 )
             )
-
-            # NULL CHECK: Verify we actually got data back
-            if response.parsed is None:
-                # If parsed is None, the model likely blocked it or returned bad JSON
-                raise ValueError("Model returned empty data (Safety block or Parse Error)")
-
-            return response.parsed, dist_name
+            if response.parsed: return response.parsed
             
         except Exception as e:
             if "429" in str(e):
-                for i in range(30, 0, -1):
-                    status_spinner.update(f"[bold red]Quota limit hit. Retrying in {i}s...")
+                for i in range(20, 0, -1):
+                    progress.update(task_id, description=f"[red]Quota hit. Retrying in {i}s...")
                     time.sleep(1)
             else:
-                # Log error to spinner but don't crash yet
-                status_spinner.update(f"[red]Error on attempt {attempt+1}: {e}. Retrying...[/red]")
-                time.sleep(2) # Short pause before retry
-                
-    raise Exception(f"Failed to generate data for {dist_name} after 3 attempts")
+                time.sleep(2)
+    raise Exception(f"Failed to generate {label}")
 
 # ---------------------------------------------------------
-# 4. Main Execution
+# 4. Generators
 # ---------------------------------------------------------
 
-def save_district_to_csv(district_data: DistrictData, output_folder):
-    os.makedirs(output_folder, exist_ok=True)
+def generate_district_structure(dist_index, dist_name, id_start, task_id, progress):
+    email_domain = f"{dist_name.lower()}.k12.edu"
     
-    def save_list(data_list, filename):
-        if not data_list: return
-        df = pd.DataFrame([item.model_dump(exclude_none=True) for item in data_list])
-        path = os.path.join(output_folder, filename)
-        df.to_csv(path, index=False)
+    prompt = f"""
+    Generate structure for '{dist_name} District'.
+    
+    REQUIREMENTS:
+    - {SCHOOLS_PER_DISTRICT} Schools.
+    - {TEACHERS_PER_SCHOOL} Teachers per School.
+    - 2 Staff per School.
+    - Include 1 extra Staff member with title "District Administrator" assigned to the first school.
+    
+    CONSTRAINTS:
+    - IDs must start at {id_start}.
+    - Emails must use @{email_domain}.
+    - No placeholder names.
+    """
+    return generate_with_retry(prompt, DistrictStructure, task_id, progress, f"Building {dist_name} Structure")
 
-    save_list(district_data.schools, "schools.csv")
-    save_list(district_data.teachers, "teachers.csv")
-    save_list(district_data.students, "students.csv")
-    save_list(district_data.sections, "sections.csv")
-    save_list(district_data.enrollments, "enrollments.csv")
-    save_list(district_data.staff, "staff.csv")
+def generate_school_roster(school: School, teachers: List[Teacher], id_start, task_id, progress):
+    # Filter teachers for THIS school only
+    school_teachers = [t for t in teachers if t.School_id == school.School_id]
+    teacher_ids = [t.Teacher_id for t in school_teachers]
+    
+    co_teacher_instruction = ""
+    if INCLUDE_CO_TEACHERS:
+        co_teacher_instruction = "- Populate 'Teacher_2_id' for at least one section."
+
+    prompt = f"""
+    Generate roster for School: {school.School_name} (ID: {school.School_id}).
+    
+    REQUIREMENTS:
+    - {SECTIONS_PER_SCHOOL} Sections.
+    - {STUDENTS_PER_SECTION} Students per section.
+    - USE THESE TEACHER IDs for sections: {teacher_ids}
+    - 1 Student in each section must be enrolled in multiple sections.
+    - {co_teacher_instruction}
+    
+    CONSTRAINTS:
+    - New IDs (Student/Section) must start at {id_start}.
+    - Student emails must use the school's district domain.
+    - Realistic names.
+    """
+    return generate_with_retry(prompt, SchoolRoster, task_id, progress, f"Rostering {school.School_name}")
+
+# ---------------------------------------------------------
+# 5. Main Execution
+# ---------------------------------------------------------
 
 if __name__ == "__main__":
     base_output_dir = 'school_district_data'
     
-    console.rule("[bold blue]School Data Generator[/bold blue]")
-    console.print(f"Target: [cyan]{NUM_DISTRICTS} Districts[/cyan]\n")
+    # Calculate Total Operations for Progress Bar
+    total_ops = NUM_DISTRICTS + (NUM_DISTRICTS * SCHOOLS_PER_DISTRICT)
+    
+    console.print("\n[bold green]Starting Generation Process...[/bold green]")
 
     with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        transient=True 
+        SpinnerColumn(), TextColumn("[progress.description]{task.description}"), 
+        BarColumn(), console=console
     ) as progress:
         
-        task = progress.add_task("[green]Starting...", total=NUM_DISTRICTS)
+        main_task = progress.add_task("[green]Initializing...", total=total_ops)
 
         for i in range(NUM_DISTRICTS):
+            dist_name = DISTRICT_NAMES[i % len(DISTRICT_NAMES)]
+            base_id = (i + 1) * 100000 
+            
+            # --- PHASE 1: Structure ---
             try:
-                # 1. GENERATE
-                district_obj, dist_name = generate_district(i, progress)
+                struct = generate_district_structure(i, dist_name, base_id, main_task, progress)
+                progress.advance(main_task) # Phase 1 Done
                 
-                # 2. SAVE
-                progress.update(task, description=f"[bold yellow]Saving CSVs for {dist_name}...")
-                folder_name = os.path.join(base_output_dir, f"{dist_name}_Data")
-                save_district_to_csv(district_obj, folder_name)
-                
-                # 3. COMPLETE
-                console.print(f" :white_check_mark: [bold green]{dist_name}[/bold green] Generated & Saved")
-                progress.advance(task)
-                
-            except Exception as e:
-                console.print(f" :cross_mark: [bold red]Failed District {i+1}: {e}[/bold red]")
+                # Prepare Master Lists
+                all_schools = struct.schools
+                all_teachers = struct.teachers
+                all_staff = struct.staff
+                all_students = []
+                all_sections = []
+                all_enrollments = []
 
-    console.rule("[bold green]All Operations Complete[/bold green]")
+                # --- PHASE 2: Rosters (Loop per School) ---
+                for s_idx, school in enumerate(all_schools):
+                    school_id_offset = base_id + ((s_idx + 1) * 10000)
+                    
+                    roster = generate_school_roster(school, all_teachers, school_id_offset, main_task, progress)
+                    
+                    all_students.extend(roster.students)
+                    all_sections.extend(roster.sections)
+                    all_enrollments.extend(roster.enrollments)
+                    progress.advance(main_task) # One School Done
+
+                # --- PHASE 3: Save ---
+                progress.update(main_task, description=f"[yellow]Saving {dist_name}...")
+                out_dir = os.path.join(base_output_dir, f"{dist_name}_Data")
+                os.makedirs(out_dir, exist_ok=True)
+
+                pd.DataFrame([x.model_dump() for x in all_schools]).to_csv(f"{out_dir}/schools.csv", index=False)
+                pd.DataFrame([x.model_dump() for x in all_teachers]).to_csv(f"{out_dir}/teachers.csv", index=False)
+                pd.DataFrame([x.model_dump() for x in all_staff]).to_csv(f"{out_dir}/staff.csv", index=False)
+                pd.DataFrame([x.model_dump() for x in all_students]).to_csv(f"{out_dir}/students.csv", index=False)
+                pd.DataFrame([x.model_dump() for x in all_sections]).to_csv(f"{out_dir}/sections.csv", index=False)
+                pd.DataFrame([x.model_dump() for x in all_enrollments]).to_csv(f"{out_dir}/enrollments.csv", index=False)
+
+                console.print(f":white_check_mark: [bold green]{dist_name} Complete[/bold green] ({len(all_students)} Students)")
+
+            except Exception as e:
+                console.print(f":cross_mark: [red]Failed {dist_name}: {e}[/red]")
