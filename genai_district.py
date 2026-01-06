@@ -2,6 +2,8 @@ import os
 import datetime
 import time
 import pandas as pd
+import uuid
+import random
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -12,7 +14,7 @@ from typing import Literal, Optional, List
 # Import Rich for UI
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-from rich.prompt import IntPrompt, Confirm
+from rich.prompt import IntPrompt, Confirm, Prompt
 from rich.table import Table
 
 # Load environment variables
@@ -27,6 +29,13 @@ console = Console()
 
 console.rule("[bold blue]School Data Generator Setup[/bold blue]")
 
+# --- CONFIGURATION ---
+ID_MODE = Prompt.ask(
+    "Select ID Mode", 
+    choices=["sequential", "alphanumeric"], 
+    default="alphanumeric"
+)
+
 # Ask the user for inputs
 NUM_DISTRICTS = IntPrompt.ask("How many [cyan]Districts[/cyan]?", default=2)
 SCHOOLS_PER_DISTRICT = IntPrompt.ask("How many [cyan]Schools per District[/cyan]?", default=3)
@@ -37,16 +46,31 @@ INCLUDE_CO_TEACHERS = Confirm.ask("Include [cyan]Co-Teachers[/cyan] in at least 
 
 DISTRICT_NAMES = ["WestCharter", "EastCharter", "NorthCharter", "SouthCharter", "CentralValley", "Lakeside", "MountainView", "PacificCoast"]
 
+# State Mappings
+STATE_MAPPINGS = {
+    "C4a": ("California", "CA"),
+    "T3x": ("Texas", "TX"),
+    "N3y": ("New York", "NY"),
+    "F1a": ("Florida", "FL"),
+    "W2a": ("Washington", "WA"),
+    "I1l": ("Illinois", "IL"),
+    "C0l": ("Colorado", "CO"),
+    "A7z": ("Arizona", "AZ"),
+    "G4a": ("Georgia", "GA"),
+    "M4a": ("Massachusetts", "MA")
+}
+STATE_KEYS = list(STATE_MAPPINGS.keys())
+
 # Display Summary
 summary_table = Table(title="Configuration Summary")
 summary_table.add_column("Setting", style="cyan")
 summary_table.add_column("Value", style="magenta")
+summary_table.add_row("ID Mode", ID_MODE.upper())
 summary_table.add_row("Districts", str(NUM_DISTRICTS))
 summary_table.add_row("Schools/District", str(SCHOOLS_PER_DISTRICT))
 summary_table.add_row("Teachers/School", str(TEACHERS_PER_SCHOOL))
 summary_table.add_row("Sections/School", str(SECTIONS_PER_SCHOOL))
 summary_table.add_row("Students/Section", str(STUDENTS_PER_SECTION))
-summary_table.add_row("Co-Teachers", "Yes" if INCLUDE_CO_TEACHERS else "No")
 
 console.print(summary_table)
 if not Confirm.ask("Ready to generate?", default=True):
@@ -54,14 +78,13 @@ if not Confirm.ask("Ready to generate?", default=True):
     exit()
 
 # ---------------------------------------------------------
-# 2. Pydantic Models (Split into Phase 1 & Phase 2)
+# 2. Pydantic Models
 # ---------------------------------------------------------
 
 GenderType = Literal['M', 'F', 'X']
 GradeLevel = Literal['PK', 'KG', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
 RealisticName = Field(..., pattern=r"^[^0-9]+$")
 
-# --- PHASE 1 MODELS (Structure) ---
 class School(BaseModel):
     School_id: str
     School_name: str
@@ -79,6 +102,8 @@ class School(BaseModel):
 class Teacher(BaseModel):
     School_id: str
     Teacher_id: str
+    Teacher_number: str       # <--- NEW FIELD
+    State_teacher_id: str     # <--- NEW FIELD
     Teacher_email: EmailStr
     First_name: str = RealisticName
     Last_name: str = RealisticName
@@ -98,17 +123,17 @@ class DistrictStructure(BaseModel):
     teachers: List[Teacher]
     staff: List[Staff]
 
-# --- PHASE 2 MODELS (Rosters) ---
 class Student(BaseModel):
     School_id: str
     Student_id: str
-    Student_number: str
+    Student_number: str 
+    State_id: str             # <--- NEW FIELD
     Last_name: str = RealisticName
     First_name: str = RealisticName
     Grade: GradeLevel
     Gender: GenderType
     DOB: str
-    Email_address: EmailStr
+    Student_email: EmailStr
 
 class Section(BaseModel):
     School_id: str
@@ -139,6 +164,15 @@ def get_safety_settings():
         for c in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, 
                   HarmCategory.HARM_CATEGORY_HARASSMENT, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT]
     ]
+
+def get_id_instructions(mode, state_abbr, base_id):
+    """
+    Generates the specific prompt instruction for IDs.
+    """
+    if mode == "alphanumeric":
+        return f"IDs (School/Teacher/Student) must be Random HEX strings (e.g., 8f4e2a). Do NOT include State prefixes here."
+    else:
+        return f"IDs must be numeric and start at {base_id}."
 
 def generate_with_retry(prompt, schema, task_id, progress, label):
     """Generic retry wrapper for API calls"""
@@ -172,9 +206,18 @@ def generate_with_retry(prompt, schema, task_id, progress, label):
 
 def generate_district_structure(dist_index, dist_name, id_start, task_id, progress):
     email_domain = f"{dist_name.lower()}.k12.edu"
+    state_key = STATE_KEYS[dist_index % len(STATE_KEYS)]
+    state_name, state_abbr = STATE_MAPPINGS[state_key]
     
+    id_instr = get_id_instructions(ID_MODE, state_abbr, id_start)
+
+    # --- TEACHER ID LOGIC ---
+    # Teacher_id: Hex (e.g. 6c1e2d1)
+    # Teacher_number: T-[6 digits] (e.g. T-923456)
+    # State_teacher_id: [State]-[Teacher_number] (e.g. CA-T-923456)
+
     prompt = f"""
-    Generate structure for '{dist_name} District'.
+    Generate structure for '{dist_name} District' located in {state_name} ({state_abbr}).
     
     REQUIREMENTS:
     - {SCHOOLS_PER_DISTRICT} Schools.
@@ -183,13 +226,18 @@ def generate_district_structure(dist_index, dist_name, id_start, task_id, progre
     - Include 1 extra Staff member with title "District Administrator" assigned to the first school.
     
     CONSTRAINTS:
-    - IDs must start at {id_start}.
+    - {id_instr}
     - Emails must use @{email_domain}.
-    - No placeholder names.
+    - School City/State/Zip must be valid for {state_name}.
+    
+    - **TEACHER SPECIFIC FORMATS**:
+      1. Teacher_id: Unique Random Hex String (e.g. '6c1e2d1').
+      2. Teacher_number: Format 'T-[6 DIGITS]' (e.g. 'T-923456').
+      3. State_teacher_id: Format '{state_abbr}-[Teacher_number]' (e.g. '{state_abbr}-T-923456').
     """
     return generate_with_retry(prompt, DistrictStructure, task_id, progress, f"Building {dist_name} Structure")
 
-def generate_school_roster(school: School, teachers: List[Teacher], id_start, task_id, progress):
+def generate_school_roster(school: School, teachers: List[Teacher], id_start, district_num_prefix, task_id, progress):
     # Filter teachers for THIS school only
     school_teachers = [t for t in teachers if t.School_id == school.School_id]
     teacher_ids = [t.Teacher_id for t in school_teachers]
@@ -198,13 +246,21 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, ta
     if INCLUDE_CO_TEACHERS:
         co_teacher_instruction = "- Populate 'Teacher_2_id' for at least one section."
 
-    # --- DOB LOGIC ---
     current_year = datetime.date.today().year
-    # K-12 Students are typically 5 to 19 years old.
-    # We add a 1-year buffer to be safe.
-    min_birth_year = current_year - 20  # Approx 19-20 years old max
-    max_birth_year = current_year - 4   # Approx 4-5 years old min
+    min_birth_year = current_year - 20 
+    max_birth_year = current_year - 4 
     
+    state_abbr = school.School_state if len(school.School_state) == 2 else "XX"
+    id_instr = get_id_instructions(ID_MODE, state_abbr, id_start)
+    
+    # We use a shorthand for the year suffix (e.g. "26" for 2026)
+    yr_suffix = str(current_year)[-2:]
+
+    # --- STUDENT ID LOGIC ---
+    # Student_id: Hex (e.g. 7d2a1f1)
+    # Student_number: [Prefix][Random] (e.g. 10894561)
+    # State_id: [State]-[Yr]-[Student_number] (e.g. CA-26-10894561)
+
     prompt = f"""
     Generate roster for School: {school.School_name} (ID: {school.School_id}).
     
@@ -216,12 +272,16 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, ta
     - {co_teacher_instruction}
     
     CONSTRAINTS:
-    - New IDs (Student/Section) must start at {id_start}.
+    - {id_instr} (Applies to Student_id and Section_id)
+    
+    - **STUDENT SPECIFIC FORMATS**:
+      1. Student_id: Unique Random Hex String (e.g. '7d2a1f1').
+      2. Student_number: 8-digit integer starting with '{district_num_prefix}'. (e.g. '{district_num_prefix}82910').
+      3. State_id: Format '{state_abbr}-{yr_suffix}-[Student_number]' (e.g. '{state_abbr}-{yr_suffix}-{district_num_prefix}82910').
+      
     - Student emails must use the school's district domain.
     - Realistic names.
-    - **DOB REALISM**: Use the current year ({current_year}) as the reference. 
-      Student birth years MUST be between {min_birth_year} and {max_birth_year} to match K-12 ages.
-      Example: A 1st grader should be born around {current_year - 6}.
+    - DOB between {min_birth_year} and {max_birth_year}.
     """
     return generate_with_retry(prompt, SchoolRoster, task_id, progress, f"Rostering {school.School_name}")
 
@@ -231,8 +291,6 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, ta
 
 if __name__ == "__main__":
     base_output_dir = 'school_district_data'
-    
-    # Calculate Total Operations for Progress Bar
     total_ops = NUM_DISTRICTS + (NUM_DISTRICTS * SCHOOLS_PER_DISTRICT)
     
     console.print("\n[bold green]Starting Generation Process...[/bold green]")
@@ -248,36 +306,37 @@ if __name__ == "__main__":
             dist_name = DISTRICT_NAMES[i % len(DISTRICT_NAMES)]
             base_id = (i + 1) * 100000 
             
+            # Prefix for Student Numbers (e.g. 10, 11)
+            district_prefix = str(10 + i) 
+            
             # --- PHASE 1: Structure ---
             try:
                 struct = generate_district_structure(i, dist_name, base_id, main_task, progress)
                 
-                # --- NEW: DUAL ROLE LOGIC (Teacher + Staff) ---
-                # We take the first teacher and "hire" them as a staff member too.
+                # Dual Role Logic
                 if struct.teachers and struct.staff:
                     target_teacher = struct.teachers[0]
-                    
-                    # Find a safe new ID (Increment the highest existing Staff ID)
-                    existing_ids = [int(s.Staff_id) for s in struct.staff]
-                    new_staff_id = str(max(existing_ids) + 1)
+                    if ID_MODE == 'alphanumeric':
+                        new_staff_id = f"{target_teacher.Teacher_id}-DUAL"
+                    else:
+                        existing_ids = [int(s.Staff_id) for s in struct.staff if s.Staff_id.isdigit()]
+                        start_num = max(existing_ids) + 1 if existing_ids else 9999
+                        new_staff_id = str(start_num)
                     
                     dual_role_staff = Staff(
                         School_id=target_teacher.School_id,
                         Staff_id=new_staff_id,
-                        Staff_email=target_teacher.Teacher_email, # CRITICAL: Same Email links the user
+                        Staff_email=target_teacher.Teacher_email, 
                         First_name=target_teacher.First_name,
                         Last_name=target_teacher.Last_name,
                         Department="Dual Role Test",
                         Title="Teacher & Support Staff"
                     )
-                    
-                    # Add to the list so it gets saved to CSV later
                     struct.staff.append(dual_role_staff)
-                    console.print(f"   [dim]Created Dual Role: {target_teacher.First_name} {target_teacher.Last_name}[/dim]")
 
-                progress.advance(main_task) # Phase 1 Done
+                progress.advance(main_task) 
                 
-                # Prepare Master Lists
+                # Master Lists
                 all_schools = struct.schools
                 all_teachers = struct.teachers
                 all_staff = struct.staff
@@ -285,16 +344,24 @@ if __name__ == "__main__":
                 all_sections = []
                 all_enrollments = []
 
-                # --- PHASE 2: Rosters (Loop per School) ---
+                # --- PHASE 2: Rosters ---
                 for s_idx, school in enumerate(all_schools):
                     school_id_offset = base_id + ((s_idx + 1) * 10000)
                     
-                    roster = generate_school_roster(school, all_teachers, school_id_offset, main_task, progress)
+                    # Pass Prefix
+                    roster = generate_school_roster(
+                        school, 
+                        all_teachers, 
+                        school_id_offset, 
+                        district_prefix,
+                        main_task, 
+                        progress
+                    )
                     
                     all_students.extend(roster.students)
                     all_sections.extend(roster.sections)
                     all_enrollments.extend(roster.enrollments)
-                    progress.advance(main_task) # One School Done
+                    progress.advance(main_task)
 
                 # --- PHASE 3: Save ---
                 progress.update(main_task, description=f"[yellow]Saving {dist_name}...")
