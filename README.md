@@ -133,4 +133,15 @@ The data adheres to strict referential integrity. All foreign keys (e.g., `Teach
 * **Names:** Realistic human names (no "Student1" or "TestUser").
 * **Format:** Standard CSV (Comma Separated), UTF-8 encoded.
 
+# Limitations
 
+###1. The "Per-School" Token Limit (The Hardest Wall)
+Even though we chunk data by school, each school's roster is generated in a single API call. If a single school is too large, the JSON response will get cut off, and that specific school will fail.
+
+* **The Limit:** ~8,192 Output Tokens (approx. 30,000 characters).
+
+* **The Math:** A single student record in JSON takes ~150–200 characters.
+
+* **The Cap:** You can generate roughly 150–180 students per school safely.
+
+###
