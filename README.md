@@ -144,4 +144,14 @@ Even though we chunk data by school, each school's roster is generated in a sing
 
 * **The Cap:** You can generate roughly 150–180 students per school safely.
 
+* ⛔ **Danger Zone:** If you set:
+    * Sections per School: 10
+    * Students per Section: 25
+    * Total: 250 Students $\rightarrow$ **Will likely crash**.
+
+* ✅ **Safe Zone:**
+    * Sections per School: 5
+    * Students per Section: 20
+    * Total: 100 Students $\rightarrow$ **Safe**.
+
 ###
