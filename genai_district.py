@@ -38,22 +38,22 @@ ID_MODE = Prompt.ask(
 
 # Ask the user for inputs
 NUM_DISTRICTS = IntPrompt.ask("How many [cyan]Districts[/cyan]?", default=2)
-SCHOOLS_PER_DISTRICT = IntPrompt.ask("How many [cyan]Schools per District[/cyan]?", default=3)
+SCHOOLS_PER_DISTRICT = IntPrompt.ask("How many [cyan]Schools per District[/cyan]?", default=10)
 TEACHERS_PER_SCHOOL = IntPrompt.ask("How many [cyan]Teachers per School[/cyan]?", default=5)
 SECTIONS_PER_SCHOOL = IntPrompt.ask("How many [cyan]Sections per School[/cyan]?", default=4)
 STUDENTS_PER_SECTION = IntPrompt.ask("How many [cyan]Students per Section[/cyan]?", default=15)
 INCLUDE_CO_TEACHERS = Confirm.ask("Include [cyan]Co-Teachers[/cyan] in at least one section?", default=True)
 
-# --- NEW: GENERIC / UNIVERSAL NAMES ---
-# These work in any US State (MA, TX, CA, etc.)
+# Internal Batch Size (Safe Token Limit)
+BATCH_SIZE = 5 
+
+# --- GENERIC / UNIVERSAL NAMES ---
 GENERIC_DISTRICT_NAMES = [
     "MapleValley", "OakRiver", "SummitHeights", "PineCreek", 
     "LibertyUnion", "Heritage", "PioneerValley", "GrandView", 
     "Clearwater", "HopeSprings", "NorthStar", "GoldenPlains",
     "SilverLake", "WillowCreek", "Unity", "CedarRidge"
 ]
-
-# Randomize the list so we get different names every run
 random.shuffle(GENERIC_DISTRICT_NAMES)
 
 # State Mappings
@@ -79,8 +79,8 @@ summary_table.add_row("ID Mode", ID_MODE.upper())
 summary_table.add_row("Districts", str(NUM_DISTRICTS))
 summary_table.add_row("Schools/District", str(SCHOOLS_PER_DISTRICT))
 summary_table.add_row("Teachers/School", str(TEACHERS_PER_SCHOOL))
-summary_table.add_row("Sections/School", str(SECTIONS_PER_SCHOOL))
 summary_table.add_row("Students/Section", str(STUDENTS_PER_SECTION))
+summary_table.add_row("Batch Size", str(BATCH_SIZE))
 
 console.print(summary_table)
 if not Confirm.ask("Ready to generate?", default=True):
@@ -128,7 +128,7 @@ class Staff(BaseModel):
     Department: str
     Title: str
 
-class DistrictStructure(BaseModel):
+class DistrictBatch(BaseModel):
     schools: List[School]
     teachers: List[Teacher]
     staff: List[Staff]
@@ -143,7 +143,7 @@ class Student(BaseModel):
     Grade: GradeLevel
     Gender: GenderType
     DOB: str
-    Student_email: EmailStr
+    Email_address: EmailStr
 
 class Section(BaseModel):
     School_id: str
@@ -176,19 +176,18 @@ def get_safety_settings():
     ]
 
 def get_id_instructions(mode, state_abbr, base_id):
-    """
-    Generates the specific prompt instruction for IDs.
-    """
     if mode == "alphanumeric":
         return f"IDs must be Random HEX strings. Do NOT include State prefixes here."
     else:
         return f"IDs must be numeric and start at {base_id}."
 
 def generate_with_retry(prompt, schema, task_id, progress, label):
-    """Generic retry wrapper for API calls"""
-    for attempt in range(3):
+    # INCREASED RETRY COUNT TO 5
+    for attempt in range(5):
         try:
             progress.update(task_id, description=f"[blue]{label} (Attempt {attempt+1})")
+            
+            # --- API CALL ---
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=prompt,
@@ -199,12 +198,18 @@ def generate_with_retry(prompt, schema, task_id, progress, label):
                     safety_settings=get_safety_settings()
                 )
             )
+            
+            # --- THROTTLE ---
+            # Wait 4 seconds after every call to stay under ~15 RPM
+            time.sleep(4) 
+            
             if response.parsed: return response.parsed
             
         except Exception as e:
             if "429" in str(e):
-                for i in range(20, 0, -1):
-                    progress.update(task_id, description=f"[red]Quota hit. Retrying in {i}s...")
+                # If we hit quota, wait significantly longer (60s)
+                for i in range(60, 0, -1):
+                    progress.update(task_id, description=f"[red]Quota hit. Cooling down {i}s...")
                     time.sleep(1)
             else:
                 time.sleep(2)
@@ -214,41 +219,43 @@ def generate_with_retry(prompt, schema, task_id, progress, label):
 # 4. Generators
 # ---------------------------------------------------------
 
-def generate_district_structure(dist_index, dist_name, id_start, task_id, progress):
+def generate_district_batch(dist_name, state_name, state_abbr, num_schools, id_start, task_id, progress):
+    """
+    Generates a small chunk of the district structure (e.g., 5 schools).
+    """
     email_domain = f"{dist_name.lower()}.k12.edu"
-    state_key = STATE_KEYS[dist_index % len(STATE_KEYS)]
-    state_name, state_abbr = STATE_MAPPINGS[state_key]
-    
     id_instr = get_id_instructions(ID_MODE, state_abbr, id_start)
 
+    # --- UPDATED PROMPT: NO NUMBERED NAMES ---
     prompt = f"""
-    Generate structure for '{dist_name} District' located in {state_name} ({state_abbr}).
+    Generate a partial structure for '{dist_name} District' located in {state_name} ({state_abbr}).
     
     REQUIREMENTS:
-    - {SCHOOLS_PER_DISTRICT} Schools.
+    - {num_schools} Schools.
     - {TEACHERS_PER_SCHOOL} Teachers per School.
     - 2 Staff per School.
-    - Include 1 extra Staff member with title "District Administrator" assigned to the first school.
     
     CONSTRAINTS:
     - {id_instr}
     - Emails must use @{email_domain}.
     
     - **LENGTH RULES**:
-      1. School_id: Must be between 5 and 6 characters long (e.g. '8f4a1' or '9b3c2d').
-      2. Teacher_id & Staff_id: Must be exactly 7 characters long (e.g. '7e6d5c4').
+      1. School_id: 5-6 chars.
+      2. Teacher_id & Staff_id: 7 chars.
 
-    - **TEACHER SPECIFIC FORMATS**:
-      1. Teacher_number: Format 'T-[6 DIGITS]' (e.g. 'T-923456').
-      2. State_teacher_id: Format '{state_abbr}-T-[6 Digits from Teacher_number]' (e.g. '{state_abbr}-T-923456').
+    - **TEACHER FORMATS**:
+      1. Teacher_number: 'T-[6 DIGITS]' (e.g. 'T-923456').
+      2. State_teacher_id: '{state_abbr}-T-[6 Digits]' (e.g. '{state_abbr}-T-923456').
 
-    - **STRICT ANTI-PATTERN RULES** (Do NOT break this):
-      - IDs must look SCRAMBLED and HIGH ENTROPY.
-      - NO sequential numbers (e.g., forbid '123456', '765432').
-      - NO sequential letters (e.g., forbid 'abcde', 'edcba').
-      - NO repeating characters (e.g., forbid 'aaaaa', '11111').
+    - **NAMING RULES**:
+      - Use realistic, varied names (e.g., "Pine Creek Elementary", "North High").
+      - **DO NOT** include numbers or indices in names (e.g., NO "School 1", NO "Elementary 2").
+
+    - **ANTI-PATTERN RULES**:
+      - IDs must be HIGH ENTROPY.
+      - NO sequential numbers/letters.
     """
-    return generate_with_retry(prompt, DistrictStructure, task_id, progress, f"Building {dist_name} Structure")
+    return generate_with_retry(prompt, DistrictBatch, task_id, progress, f"Building Batch ({num_schools} Schools)")
 
 def generate_school_roster(school: School, teachers: List[Teacher], id_start, district_num_prefix, school_code_2digit, task_id, progress):
     school_teachers = [t for t in teachers if t.School_id == school.School_id]
@@ -261,7 +268,6 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, di
     current_year = datetime.date.today().year
     min_birth_year = current_year - 20 
     max_birth_year = current_year - 4 
-    
     state_abbr = school.School_state if len(school.School_state) == 2 else "XX"
     id_instr = get_id_instructions(ID_MODE, state_abbr, id_start)
 
@@ -271,7 +277,7 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, di
     REQUIREMENTS:
     - {SECTIONS_PER_SCHOOL} Sections.
     - {STUDENTS_PER_SECTION} Students per section.
-    - USE THESE TEACHER IDs for sections: {teacher_ids}
+    - USE THESE TEACHER IDs: {teacher_ids}
     - 1 Student in each section must be enrolled in multiple sections.
     - {co_teacher_instruction}
     
@@ -279,20 +285,14 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, di
     - {id_instr}
     
     - **LENGTH RULES**:
-      1. Student_id: Must be exactly 6 characters long (e.g. 'a1b2c3').
+      1. Student_id: 6 chars.
     
-    - **STUDENT SPECIFIC FORMATS**:
-      1. Student_number: 8-digit integer starting with '{district_num_prefix}'. (e.g. '{district_num_prefix}82910').
-      2. State_id: Format '{state_abbr}-{school_code_2digit}-[Student_number]' (e.g. '{state_abbr}-{school_code_2digit}-{district_num_prefix}82910').
+    - **STUDENT FORMATS**:
+      1. Student_number: 8-digit integer starting with '{district_num_prefix}'.
+      2. State_id: '{state_abbr}-{school_code_2digit}-[Student_number]'.
       
-    - Student emails must use the school's district domain.
     - DOB between {min_birth_year} and {max_birth_year}.
-
-    - **STRICT ANTI-PATTERN RULES** (Do NOT break this):
-      - IDs must look SCRAMBLED and HIGH ENTROPY.
-      - NO sequential numbers (e.g., forbid '123456', '765432').
-      - NO sequential letters (e.g., forbid 'abcde', 'edcba').
-      - NO repeating characters (e.g., forbid 'aaaaa', '11111').
+    - **ANTI-PATTERN RULES**: NO sequential numbers/letters.
     """
     return generate_with_retry(prompt, SchoolRoster, task_id, progress, f"Rostering {school.School_name}")
 
@@ -302,6 +302,9 @@ def generate_school_roster(school: School, teachers: List[Teacher], id_start, di
 
 if __name__ == "__main__":
     base_output_dir = 'school_district_data'
+    
+    # Calculate Total Operations
+    # Phase 1 is now batched, but we can just estimate progress based on total schools
     total_ops = NUM_DISTRICTS + (NUM_DISTRICTS * SCHOOLS_PER_DISTRICT)
     
     console.print("\n[bold green]Starting Generation Process...[/bold green]")
@@ -314,57 +317,103 @@ if __name__ == "__main__":
         main_task = progress.add_task("[green]Initializing...", total=total_ops)
 
         for i in range(NUM_DISTRICTS):
-            # Pick a random name from the shuffled list (cycling if we exceed list length)
             dist_name = GENERIC_DISTRICT_NAMES[i % len(GENERIC_DISTRICT_NAMES)]
             
+            # Setup State Context
+            state_key = STATE_KEYS[i % len(STATE_KEYS)]
+            state_name, state_abbr = STATE_MAPPINGS[state_key]
+            
+            district_prefix = str(10 + i)
             base_id = (i + 1) * 100000 
             
-            # Prefixes and Codes
-            district_prefix = str(10 + i) 
+            # --- PHASE 1: BATCHED STRUCTURE GENERATION ---
+            # We must loop here to generate schools in chunks
+            all_schools = []
+            all_teachers = []
+            all_staff = []
             
-            # --- PHASE 1: Structure ---
-            try:
-                struct = generate_district_structure(i, dist_name, base_id, main_task, progress)
+            schools_generated_count = 0
+            
+            while schools_generated_count < SCHOOLS_PER_DISTRICT:
+                # Calculate how many to ask for in this batch
+                remaining = SCHOOLS_PER_DISTRICT - schools_generated_count
+                current_batch_size = min(BATCH_SIZE, remaining)
                 
-                # Dual Role Logic
-                if struct.teachers and struct.staff:
-                    target_teacher = struct.teachers[0]
-                    if ID_MODE == 'alphanumeric':
-                        new_staff_id = f"{target_teacher.Teacher_id}D" # Add 'D' to keep it near 7 chars?
-                        if len(new_staff_id) > 7: new_staff_id = new_staff_id[:7] # Strict clip
-                    else:
-                        existing_ids = [int(s.Staff_id) for s in struct.staff if s.Staff_id.isdigit()]
-                        start_num = max(existing_ids) + 1 if existing_ids else 9999
-                        new_staff_id = str(start_num)
-                    
-                    dual_role_staff = Staff(
-                        School_id=target_teacher.School_id,
-                        Staff_id=new_staff_id,
-                        Staff_email=target_teacher.Teacher_email, 
-                        First_name=target_teacher.First_name,
-                        Last_name=target_teacher.Last_name,
-                        Department="Dual Role Test",
-                        Title="Teacher & Support Staff"
+                # Offset IDs if using sequential mode
+                batch_id_start = base_id + (schools_generated_count * 1000)
+                
+                try:
+                    # CALL THE BATCH GENERATOR
+                    batch_struct = generate_district_batch(
+                        dist_name, state_name, state_abbr, 
+                        current_batch_size, batch_id_start, 
+                        main_task, progress
                     )
-                    struct.staff.append(dual_role_staff)
-
-                progress.advance(main_task) 
-                
-                # Master Lists
-                all_schools = struct.schools
-                all_teachers = struct.teachers
-                all_staff = struct.staff
-                all_students = []
-                all_sections = []
-                all_enrollments = []
-
-                # --- PHASE 2: Rosters ---
-                for s_idx, school in enumerate(all_schools):
-                    school_id_offset = base_id + ((s_idx + 1) * 10000)
                     
-                    # GENERATE 2-DIGIT SCHOOL CODE
-                    school_code_2digit = f"{s_idx + 1:02d}"
+                    # Accumulate results
+                    all_schools.extend(batch_struct.schools)
+                    all_teachers.extend(batch_struct.teachers)
+                    all_staff.extend(batch_struct.staff)
+                    
+                    schools_generated_count += current_batch_size
+                    
+                except Exception as e:
+                    console.print(f"[red]Batch failed for {dist_name}: {e}[/red]")
+                    break # Stop district if batch fails
+            
+            # --- POST-PROCESSING: SINGLETONS ---
+            # 1. Create District Administrator (Manually)
+            # We take the first school's ID to assign them home
+            if all_schools:
+                admin_school_id = all_schools[0].School_id
+                
+                if ID_MODE == 'alphanumeric':
+                    admin_id = uuid.uuid4().hex[:7]
+                else:
+                    admin_id = str(base_id + 99999) # Fixed high number
+                
+                dist_admin = Staff(
+                    School_id=admin_school_id,
+                    Staff_id=admin_id,
+                    Staff_email=f"admin@{dist_name.lower()}.k12.edu",
+                    First_name="System",
+                    Last_name="Administrator",
+                    Department="Central Office",
+                    Title="District Administrator"
+                )
+                all_staff.insert(0, dist_admin)
+            
+            # 2. Create Dual Role User (Manually)
+            if all_teachers:
+                target_teacher = all_teachers[0]
+                if ID_MODE == 'alphanumeric':
+                    dual_id = f"{target_teacher.Teacher_id}D"[:7]
+                else:
+                    dual_id = str(base_id + 99998)
+                
+                dual_role_staff = Staff(
+                    School_id=target_teacher.School_id,
+                    Staff_id=dual_id,
+                    Staff_email=target_teacher.Teacher_email,
+                    First_name=target_teacher.First_name,
+                    Last_name=target_teacher.Last_name,
+                    Department="Dual Role Test",
+                    Title="Teacher & Support Staff"
+                )
+                all_staff.append(dual_role_staff)
+            
+            progress.advance(main_task) # Phase 1 Done
+            
+            # --- PHASE 2: ROSTERING ---
+            all_students = []
+            all_sections = []
+            all_enrollments = []
 
+            for s_idx, school in enumerate(all_schools):
+                school_id_offset = base_id + ((s_idx + 1) * 10000)
+                school_code_2digit = f"{s_idx + 1:02d}"
+
+                try:
                     roster = generate_school_roster(
                         school, 
                         all_teachers, 
@@ -379,20 +428,20 @@ if __name__ == "__main__":
                     all_sections.extend(roster.sections)
                     all_enrollments.extend(roster.enrollments)
                     progress.advance(main_task)
+                except Exception as e:
+                     console.print(f"[red]Rostering failed for {school.School_name}: {e}[/red]")
 
-                # --- PHASE 3: Save ---
-                progress.update(main_task, description=f"[yellow]Saving {dist_name}...")
-                out_dir = os.path.join(base_output_dir, f"{dist_name}_Data")
-                os.makedirs(out_dir, exist_ok=True)
 
-                pd.DataFrame([x.model_dump() for x in all_schools]).to_csv(f"{out_dir}/schools.csv", index=False)
-                pd.DataFrame([x.model_dump() for x in all_teachers]).to_csv(f"{out_dir}/teachers.csv", index=False)
-                pd.DataFrame([x.model_dump() for x in all_staff]).to_csv(f"{out_dir}/staff.csv", index=False)
-                pd.DataFrame([x.model_dump() for x in all_students]).to_csv(f"{out_dir}/students.csv", index=False)
-                pd.DataFrame([x.model_dump() for x in all_sections]).to_csv(f"{out_dir}/sections.csv", index=False)
-                pd.DataFrame([x.model_dump() for x in all_enrollments]).to_csv(f"{out_dir}/enrollments.csv", index=False)
+            # --- PHASE 3: SAVE ---
+            progress.update(main_task, description=f"[yellow]Saving {dist_name}...")
+            out_dir = os.path.join(base_output_dir, f"{dist_name}_Data")
+            os.makedirs(out_dir, exist_ok=True)
 
-                console.print(f":white_check_mark: [bold green]{dist_name} Complete[/bold green] ({len(all_students)} Students)")
+            pd.DataFrame([x.model_dump() for x in all_schools]).to_csv(f"{out_dir}/schools.csv", index=False)
+            pd.DataFrame([x.model_dump() for x in all_teachers]).to_csv(f"{out_dir}/teachers.csv", index=False)
+            pd.DataFrame([x.model_dump() for x in all_staff]).to_csv(f"{out_dir}/staff.csv", index=False)
+            pd.DataFrame([x.model_dump() for x in all_students]).to_csv(f"{out_dir}/students.csv", index=False)
+            pd.DataFrame([x.model_dump() for x in all_sections]).to_csv(f"{out_dir}/sections.csv", index=False)
+            pd.DataFrame([x.model_dump() for x in all_enrollments]).to_csv(f"{out_dir}/enrollments.csv", index=False)
 
-            except Exception as e:
-                console.print(f":cross_mark: [red]Failed {dist_name}: {e}[/red]")
+            console.print(f":white_check_mark: [bold green]{dist_name} Complete[/bold green] ({len(all_students)} Students)")
