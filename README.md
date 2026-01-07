@@ -1,176 +1,150 @@
-# School District Data Generation Project
+# Clever School District Data Generator (GenAI)
+A robust Python tool that uses the Google Gemini API to generate high-fidelity, referentially intact synthetic data for testing Clever rostering integrations.
 
-This project generates a set of school district rostering data in CSV format using the Gemini API.
+This tool simulates complex multi-district environments, creating coherent CSV datasets (Schools, Teachers, Staff, Students, Sections, Enrollments) suitable for testing Clever rostering integrations.
 
-## Requirements
+# Key Features
 
-- Python 3.6 or later
-- `python-dotenv` library
-- `pandas` library
-- `google-genai` SDK library
+* **Dual ID Modes**: Choose between simple Sequential Integers (e.g., 100, 101) or complex State-Mapped Alphanumeric IDs (e.g., CA-01-8f4e2a).
 
-## Setup
+* **Referential Integrity**: Guarantees that every Student_id in an enrollment file matches a "real" student, and every Teacher_id in a section file matches a "real" teacher wihtin the dataset.
 
-1. **Clone the repository**:
-    ```sh
-    git clone https://github.com/blkwhte/genai_district.git
-    cd <repository_directory>
-    ```
+* **Localized Context**: Automatically maps districts to real US states (e.g., "WestCharter" $\rightarrow$ California), adjusting zip codes, city names, and ID formats accordingly.
 
-2. **Create a virtual environment**:
-    ```sh
-    python3 -m venv venv
-    source venv/bin/activate
-    ```
-    ```
-    # On Windows:
-    python3 -m venv venv
-    .\\venv\\Scripts\\activate
-    ```
+* **Smart Rostering**:Generates Co-Teaching scenarios.Creates Dual Role users (a user who is both a Teacher and Staff member).Enforces realistic DOB/Grade alignment.
 
-3. **Install dependencies**:
-    ```sh
-    pip install -r requirements.txt
-    ```
+* **Anti-Pattern Enforcement**: Actively prevents "lazy" AI generation (e.g., forbids sequential 12345 IDs) to ensure high-entropy, production-like data.
 
-4. **Create a `.env` file** with your Gemini API key:
-    ```env
-    API_KEY=your_gemini_api_key
-    ```
-You can generate an API key here: https://aistudio.google.com/app/apikey
+# Setup & Installation
 
-## Usage
+### 1. Prerequisites
+Python 3.9+
+A Google Gemini API Key [Get one here](https://aistudio.google.com/app/apikey)
 
-Run the script to generate the CSV files:
+### 2. Installation
 
-```sh
+```
+# 1. Clone the repository
+git clone https://github.com/blkwhte/genai_district.git
+cd genai_district
+
+# 2. Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: .\venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+```
+
+### 3. Configuration
+Create a .env file in the root directory:
+
+```
+API_KEY=your_actual_api_key_here
+```
+
+# Usage
+Run the generator:
+
+```
 python genai_district.py
 ```
 
-Temperature affects the randomness of the output, which can give better results if higher. However, it can also affect the formatting which can cause errors
+The script is interactive. You will be prompted to configure the scale of your data:
 
-Below is the current prompt being fed into the model. If you try upping the number of records per file, you may run into issues because Gemini has an output character limit, which will break the CSV generator.
+1. Select ID Mode: sequential or alphanumeric.
+2. District Count: How many distinct districts to generate.
+3. School/Student Counts: defining the density of the data.
 
+Output Structure
+Data is generated into a school_district_data/ directory, organized by district name:
 
-# Generated Test Data Specification
-
-### 1. Data Structure Overview
-This dataset simulates a multi-district environment for Clever Rostering integration testing. Each district is contained in its own subdirectory but maintains globally unique identifiers to prevent cross-contamination during ingest.
-
-**Directory Hierarchy:**
-```text
+```
 school_district_data/
-├── WestCharter_Data/      (District 1)
+├── WestCharter_Data/       (Mapped to California)
 │   ├── schools.csv
 │   ├── teachers.csv
 │   ├── staff.csv
 │   ├── students.csv
 │   ├── sections.csv
 │   └── enrollments.csv
-├── EastCharter_Data/      (District 2)
-│   ├── ... (same files)
+├── NorthCharter_Data/      (Mapped to New York)
+│   ├── ...
 └── ...
 ```
 
-### 2. Identifier (ID) LogicAll IDs are integers reserved in strictly non-overlapping blocks. This guarantees that a Student ID in one district can never conflict with a Student, Teacher, or Section ID in another.
+# Technical Architecture
+This tool operates in a Two-Phase Generation Strategy to ensure consistency within the context window limits of the LLM.
 
-| First Header  | Second Header |
-| ------------- | ------------- |
-| Content Cell  | Content Cell  |
-| Content Cell  | Content Cell  |
+### Phase 1: Structure & Hierarchy
+The model first generates the high-level "skeleton" of the district:
 
-### 3. CSV Schemas & Relationships (Staff & Faculty)
-The data adheres to strict referential integrity. All foreign keys (e.g., `Teacher_id` in `sections.csv`) point to valid records existing in the corresponding files.
-```
-#### A. schools.csv
-* **Primary Key:** `School_id`
-* **Logic:** 3-5 schools per district (configurable).
-* **Columns:** `School_id`, `School_name`, `School_number`, `Low_grade`, `High_grade`, `Principal`, `Principal_email`, `School_address`, `School_city`, `School_state`, `School_zip`, `School_phone`
+Establishes the District Schema (Name, State, Domain).
 
-#### B. teachers.csv
-* **Primary Key:** `Teacher_id`
-* **Foreign Key:** `School_id`
-* **Logic:** Unique email addresses per teacher.
-* **Columns:** `School_id`, `Teacher_id`, `Teacher_email`, `First_name`, `Last_name`, `Title`
+Generates Schools, Teachers, and Staff.
 
-#### C. staff.csv
-* **Primary Key:** `Staff_id`
-* **Foreign Key:** `School_id`
-* **Special Logic:**
-    * Includes 1 "District Administrator" per district.
-    * Includes 1 **Dual Role User** (a user who exists in both `teachers.csv` and `staff.csv` with the **same Email Address** but different IDs) to test multi-role merging.
-* **Columns:** `School_id`, `Staff_id`, `Staff_email`, `First_name`, `Last_name`, `Department`, `Title`
-```
+Why? This allows us to pass the exact list of Teacher_IDs into Phase 2, ensuring that sections are assigned to real teachers.
 
-### 4. CSV Schemas & Relationships (Rostering)
+### Phase 2: Rostering & Logic
+The model iterates through each school individually to generate Students, Sections, and Enrollments.
 
-```
-#### D. students.csv
-* **Primary Key:** `Student_id`
-* **Foreign Key:** `School_id`
-* **Logic:**
-    * DOBs are dynamically calculated relative to the current date (Ages 5-19).
-    * Grade levels (`KG`, `1`...`12`) align with DOBs.
-* **Columns:** `School_id`, `Student_id`, `Student_number`, `Last_name`, `First_name`, `Grade`, `Gender`, `DOB`, `Email_address`
+Context Isolation: By processing one school at a time, we avoid token overflow limits while maintaining the illusion of a massive, interconnected dataset.
 
-#### E. sections.csv
-* **Primary Key:** `Section_id`
-* **Foreign Keys:** `School_id`, `Teacher_id`
-* **Logic:**
-    * `Teacher_id` maps to a valid teacher in `teachers.csv`.
-    * Supports `Teacher_2_id` (Co-teaching) for edge-case testing.
-* **Columns:** `School_id`, `Section_id`, `Teacher_id`, `Teacher_2_id`, `Name`, `Grade`, `Subject`
 
-#### F. enrollments.csv
-* **Junction Table:** Maps Students to Sections.
-* **Foreign Keys:** `School_id`, `Section_id`, `Student_id`
-* **Logic:** Ensures every student belongs to at least one section. Includes multi-section enrollments.
-* **Columns:** `School_id`, `Section_id`, `Student_id`
-```
+##  Identifier Logic & Modes
+You can toggle between two distinct logic modes during runtime:
 
-### 5. Data Quality Standards
-* **Emails:** Formatted as `user@{district_name}.k12.edu`.
-* **Names:** Realistic human names (no "Student1" or "TestUser").
-* **Format:** Standard CSV (Comma Separated), UTF-8 encoded.
+### Mode A: Alphanumeric (Recommended)
+Simulates modern, high-security production environments. IDs are non-sequential and state-aware.
 
-# Limitations
+| Entity | ID Format | Example |
+| :--- | :--- | :--- |
+| **School** | 5-6 char Hex | `8f4a1` |
+| **Student** | State + SchoolCode + Number | `CA-01-10482910` |
+| **Teacher** | State + 'T' + Number | `CA-T-923456` |
 
-### 1. The "Per-School" Token Limit (The Hardest Wall)
-Even though we chunk data by school, each school's roster is generated in a single API call. If a single school is too large, the JSON response will get cut off, and that specific school will fail.
+* Collision Protection: Each district is assigned a unique numeric prefix (e.g., 10, 11) for its internal numbers, ensuring that even if two districts use similar logic, their IDs never overlap.
 
-* **The Limit:** ~8,192 Output Tokens (approx. 30,000 characters).
+### Mode B: Sequential
+Simulates legacy systems. IDs are simple integers reserved in strictly non-overlapping blocks.
 
-* **The Math:** A single student record in JSON takes ~150–200 characters.
+District 1 Base: 100,000
 
-* **The Cap:** You can generate roughly 150–180 students per school safely.
+District 2 Base: 200,000
 
-* ⛔ **Danger Zone:** If you set:
-    * Sections per School: 10
-    * Students per Section: 25
-    * Total: 250 Students $\rightarrow$ **Will likely crash**.
+## CSV Schema Specification
+1. **schools.csv**
+    * Primary Key: School_id
+    * Columns: School_id, School_name, School_number, Low_grade, High_grade, Principal, Principal_email, School_address, School_city, School_state, School_zip, School_phone
+2. **teachers.csv**
+    * Primary Key: Teacher_id
+    * Columns: School_id, Teacher_id, Teacher_number, State_teacher_id, Teacher_email, First_name, Last_name, Title
+3. **staff.csv**
+    * Primary Key: Staff_id
+    * Note: Includes Dual Role Users (users sharing an email with a teacher record) to test account merging logic.
+    * Columns: School_id, Staff_id, Staff_email, First_name, Last_name, Department, Title
+4. **students.csv**
+    * Primary Key: Student_id
+    * Columns: School_id, Student_id, Student_number, State_id, Last_name, First_name, Grade, Gender, DOB, Student_email
+5. **sections.csv**
+    * Primary Key: Section_id
+    * Foreign Keys: Teacher_id (Links to teachers.csv)
+    * Columns: School_id, Section_id, Teacher_id, Teacher_2_id, Name, Grade, Subject
+6. **enrollments.csv**
+    * Junction Table: Maps Student_id $\leftrightarrow$ Section_id.
+    * Columns: School_id, Section_id, Student_id
 
-* ✅ **Safe Zone:**
-    * Sections per School: 5
-    * Students per Section: 20
-    * Total: 100 Students $\rightarrow$ **Safe**.
+# Limitations & Theoretical Constraints
 
-### 2. The Daily Quota Limit (The "Invisible" Wall)
-On the free tier (Gemini API), Google enforces a limit on how many requests you can make per day.
+### 1. The Token Limit (The "Hard" Wall)
+The Gemini API has an output token limit per request. This script generates data per school. If you request too many students for a single school, the JSON response will be truncated, causing the script to fail for that school.Safe Limit: ~150-180 Students per School.Danger Zone: >250 Students per School.Workaround: If you need 5,000 students, generate 30 schools with 150 students each, rather than 1 school with 5,000 students.
 
-* Limit: Typically 1,500 requests per day (Free Tier).
-* Your Usage: 1 Request per District (Phase 1) + 1 Request per School (Phase 2).
-* Calculation: If you have 5 schools per district, that is 6 API calls per district.
-    * $1,500 / 6 = \text{approx. } 250 \text{ districts per day.}$
+### 2. API Quotas (The "Invisible" Wall)Google's Free Tier has daily request limits (approx. 1,500 requests/day).
+   * Math: 1 District (5 Schools) = ~6 API Calls.
+   * Capacity: You can generate roughly 250 districts per day on the free tier.
+   * If you set SCHOOLS_PER_DISTRICT higher than ~15 to 20, Phase 1 will likely cut off mid-stream, resulting in invalid JSON.
 
-### 3. The Time Factor
-This script is synchronous (it waits for one school to finish before starting the next).
-
-* Average Generation Time: ~15 seconds per school.
-
-* Math:
-
-    * 1 District (5 Schools): ~1.5 minutes.
-    * 10 Districts: ~15 minutes.
-    * 50 Districts: ~1.25 hours.
-
-**Recommendation:** For a standard test run, 5 to 10 districts is the "sweet spot." It provides plenty of data variability (50+ schools, 200+ teachers, 1000+ students) but finishes in the time it takes to grab a coffee.
+### 3. Synchronous Execution
+   * The script runs synchronously to preserve order and referential integrity.
+      * Speed: ~10-15 seconds per school.
+      * Estimates:1 District (5 schools) $\approx$ 1.5 minutes.10 Districts $\approx$ 15 minutes.
